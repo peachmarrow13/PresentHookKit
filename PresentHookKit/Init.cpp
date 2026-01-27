@@ -11,21 +11,34 @@ PresentHook::tResizeBuffers PresentHook::oResizeBuffers;
 HWND PresentHook::hwnd = nullptr;
 WNDPROC PresentHook::oWndProc = nullptr;
 
+WNDCLASSEX WindowClass = { 0 };
+
+bool DeleteWindow();
+
 bool PresentHook::HookPresent(LPVOID hkPresent)
 {
 	printf("Hooking Present: %p\n", hkPresent);
 
-	WNDCLASSA wc = { 0 };
-	wc.lpfnWndProc = DefWindowProcA;
-	wc.hInstance = GetModuleHandleA(nullptr);
-	wc.lpszClassName = "DummyWindowClass";
-	RegisterClassA(&wc);
+	
+	WindowClass.cbSize = sizeof(WNDCLASSEX);
+	WindowClass.style = CS_HREDRAW | CS_VREDRAW;
+	WindowClass.lpfnWndProc = DefWindowProc;
+	WindowClass.cbClsExtra = 0;
+	WindowClass.cbWndExtra = 0;
+	WindowClass.hInstance = GetModuleHandle(NULL);
+	WindowClass.hIcon = NULL;
+	WindowClass.hCursor = NULL;
+	WindowClass.hbrBackground = NULL;
+	WindowClass.lpszMenuName = NULL;
+	WindowClass.lpszClassName = L"Sigma";
+	WindowClass.hIconSm = NULL;
+	RegisterClassEx(&WindowClass);
 
 	ZeroMemory(&PresentHook::sd, sizeof(DXGI_SWAP_CHAIN_DESC));
 	PresentHook::sd.BufferCount = 1;
 	PresentHook::sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	PresentHook::sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-	PresentHook::sd.OutputWindow = CreateWindowA("DummyWindowClass", "Dummy Window", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, nullptr, nullptr, nullptr, nullptr);
+	PresentHook::sd.OutputWindow = CreateWindow(WindowClass.lpszClassName, L"DX11 Window", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, NULL, NULL, WindowClass.hInstance, NULL);
 	PresentHook::sd.SampleDesc.Count = 1;
 	PresentHook::sd.SampleDesc.Quality = 0;
 	PresentHook::sd.Windowed = TRUE;
@@ -80,11 +93,39 @@ bool PresentHook::HookPresent(LPVOID hkPresent)
 	}
 	else
 	{
+		HMODULE D3D11Module = GetModuleHandleA("d3d11.dll");
+
+		D3D_FEATURE_LEVEL FeatureLevel;
+		const D3D_FEATURE_LEVEL FeatureLevels[] = { D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0 };
+
+		DXGI_RATIONAL RefreshRate;
+		RefreshRate.Numerator = 60;
+		RefreshRate.Denominator = 1;
+
+		DXGI_MODE_DESC BufferDesc;
+		BufferDesc.Width = 100;
+		BufferDesc.Height = 100;
+		BufferDesc.RefreshRate = RefreshRate;
+		BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+		BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+
+		DXGI_SAMPLE_DESC SampleDesc;
+		SampleDesc.Count = 1;
+		SampleDesc.Quality = 0;
+
+		DXGI_SWAP_CHAIN_DESC SwapChainDesc;
+		SwapChainDesc.BufferDesc = BufferDesc;
+		SwapChainDesc.SampleDesc = SampleDesc;
+		SwapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+		SwapChainDesc.BufferCount = 1;
+		SwapChainDesc.OutputWindow = PresentHook::sd.OutputWindow;
+		SwapChainDesc.Windowed = 1;
+		SwapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+		SwapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+
 		printf("[INFO] Creating new SwapChain...\n");
-		if (SUCCEEDED(D3D11CreateDeviceAndSwapChain(
-			nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
-			&FeatureLevelsRequested, 1, D3D11_SDK_VERSION,
-			&PresentHook::sd, &PresentHook::pSwapChain, &PresentHook::pDevice, &FeatureLevel, &PresentHook::pContext)))
+		if (SUCCEEDED(D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, &FeatureLevelsRequested, 1, D3D11_SDK_VERSION, &PresentHook::sd, &PresentHook::pSwapChain, &PresentHook::pDevice, &FeatureLevel, &PresentHook::pContext)))
 		{
 			// void** vTable = *reinterpret_cast<void***>(PresentHook::pSwapChain);
 			// Present = vTable[8]
@@ -135,22 +176,23 @@ bool PresentHook::HookPresent(LPVOID hkPresent)
 			//vTable[8] = (void*)&hkPresent; // replace with my hook
 			//VirtualProtect(&vTable[8], sizeof(void*), oldProtect, &oldProtect);
 
-			DestroyWindow(PresentHook::sd.OutputWindow);
-
 			PresentHook::pSwapChain->Release();
-			PresentHook::pContext->Release();
 			PresentHook::pDevice->Release();
+			PresentHook::pContext->Release();
+
+			DeleteWindow();
 
 			return true;
 		}
 		else
 		{
 			printf("[ERROR] D3D11CreateDeviceAndSwapChain failed...\n");
-			if (PresentHook::sd.OutputWindow) DestroyWindow(PresentHook::sd.OutputWindow);
 
 			if (PresentHook::pSwapChain) PresentHook::pSwapChain->Release();
 			if (PresentHook::pContext) PresentHook::pContext->Release();
 			if (PresentHook::pDevice) PresentHook::pDevice->Release();
+
+			if (PresentHook::sd.OutputWindow) DeleteWindow();
 
 			return false;
 		}
@@ -290,4 +332,14 @@ void PresentHook::CleanUp(HMODULE hModule)
 	// Clean up console
 	FreeConsole();
 	FreeLibraryAndExitThread(hModule, 0);
+}
+
+bool DeleteWindow()
+{
+	DestroyWindow(PresentHook::sd.OutputWindow);
+	UnregisterClass(WindowClass.lpszClassName, WindowClass.hInstance);
+	if (PresentHook::sd.OutputWindow != 0) {
+		return FALSE;
+	}
+	return TRUE;
 }
