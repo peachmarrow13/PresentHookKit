@@ -203,7 +203,17 @@ bool PresentHook::HookPresent(LPVOID hkPresent)
 
 bool PresentHook::InitImGui()
 {
-	PresentHook::hwnd = FindWindow(L"UnrealWindow", nullptr); // ONLY UNREAL ENGINE GAMES
+	DWORD ProcId = GetCurrentProcessId();
+	EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+		DWORD wndProcId = 0;
+		GetWindowThreadProcessId(hwnd, &wndProcId);
+		if (wndProcId == GetCurrentProcessId()) {
+			*(HWND*)lParam = hwnd;
+			return FALSE; // Stop enumeration
+		}
+		return TRUE; // Continue enumeration
+	}, (LPARAM)&PresentHook::hwnd);
+
 	if (!PresentHook::pDevice || !PresentHook::pContext) {
 		std::cout << "[ERROR] Device or Context is null...\n";
 		Sleep(30);
@@ -217,7 +227,11 @@ bool PresentHook::InitImGui()
 	}
 
 	// Setup ImGui context
-	IMGUI_CHECKVERSION();
+	if (!IMGUI_CHECKVERSION())
+	{
+		std::cout << "[ERROR] ImGui version check failed\n";
+		return false;
+	}
 	ImGui::CreateContext();
 
 	if (!ImGui::GetCurrentContext())
